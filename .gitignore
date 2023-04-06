@@ -1,0 +1,13 @@
+.DS_Store
+
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+.env
+.env.local
+
+# docker-compse test files
+
+/playground
+/dev
