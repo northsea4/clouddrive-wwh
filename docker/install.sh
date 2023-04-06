@@ -154,14 +154,9 @@ get_shared_type() {
     return
   fi
 
-  # TODO 如果是"/"这个挂载点，似乎也可以使用shared，不是很确定，待更多环境测试
-  if [[ "$mountPoint" == "/" ]]; then
-    echo "shared"
-    return
-  fi
-
-  # 如果等于Docker数据目录所在的挂载点，则返回”rshared“
-  if [[ "$mountPoint" == "$DOCKER_ROOT_DIR_MOUNT_POINT" ]]; then
+  # 如果等于Docker数据目录所在的挂载点，则返回"rshared"
+  # 只有当路径完全等于挂载点时，才需要"rshared/rslave"
+  if [[ "$mountPoint" == "$DOCKER_ROOT_DIR_MOUNT_POINT" && "$1" == "$mountPoint" ]]; then
     echo "rshared"
   else
     echo "shared"
