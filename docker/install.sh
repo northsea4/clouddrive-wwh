@@ -1,22 +1,76 @@
 #!/bin/bash
 
-# 检查是否有docker命令
-if ! command -v docker &> /dev/null
-then
-  echo "❌ 未找到docker命令，请先安装docker。"
-  exit 1
-fi
+# 如果是v2版本，则不能低于2.5.0版本
+check_docker_compose() {
+  # 检查是否有docker-compose命令
+  if ! command -v docker-compose &> /dev/null
+  then
+    echo "❌ 未找到docker-compose命令，请先安装docker-compose。"
+    exit 1
+  fi
 
-# 检查是否有docker-compose命令
-if ! command -v docker-compose &> /dev/null
-then
-  echo "❌ 未找到docker-compose命令，请先安装docker-compose。"
-  exit 1
-fi
+  local dockerComposeVersion=$(docker-compose version --short)
+  if [[ -z "$dockerComposeVersion" ]]; then
+    echo "❌ 错误：获取docker-compose版本失败。"
+    exit 1
+  fi
+
+  local dockerComposeVersionMajor=$(echo "$dockerComposeVersion" | cut -d. -f1)
+  local dockerComposeVersionMinor=$(echo "$dockerComposeVersion" | cut -d. -f2)
+  local dockerComposeVersionPatch=$(echo "$dockerComposeVersion" | cut -d. -f3)
+
+  # 如果是v1版本，则不需要判断
+  if [[ $dockerComposeVersionMajor -eq 1 ]]; then
+    echo "✅ docker-compose版本：$dockerComposeVersion"
+    return
+  fi
+
+  # 如果是v2版本，则不能低于2.5.0版本
+  if [[ $dockerComposeVersionMajor -eq 2 && $dockerComposeVersionMinor -lt 5 ]]; then
+    echo "❌ 错误：docker-compose为v2时，版本不能低于2.5.0版本，当前版本${dockerComposeVersion}，请先升级docker-compose。"
+    exit 1
+  fi
+
+  echo "✅ docker-compose版本：$dockerComposeVersion"
+}
+
+check_docker() {
+  # 检查是否有docker命令
+  if ! command -v docker &> /dev/null
+  then
+    echo "❌ 未找到docker命令，请先安装docker。"
+    exit 1
+  fi
+
+  # 检查是否有执行docker命令的权限
+  if ! docker info &> /dev/null
+  then
+    echo "❌ 当前用户没有执行docker命令的权限，请使用sudo执行(在命令前面加上「sudo 」，注意有一个空格)。"
+    exit 1
+  fi
+
+  echo "✅ docker版本：$(docker -v)"
+}
+
+# 检查docker
+check_docker
+
+# 检查docker-compose
+check_docker_compose
+
+echo ""
+
 
 OS=$(uname)
 
 TIMEZONE="Asia/Shanghai"
+
+SUDO_CMD="sudo"
+# 有些系统可能没有sudo命令
+if ! command -v sudo &> /dev/null
+then
+  SUDO_CMD=""
+fi
 
 # 系统挂载点列表
 MOUNT_POINTS=()
@@ -64,24 +118,9 @@ get_mount_point() {
 }
 
 
-# 测试 get_mount_point
-# paths=(
-#   "/"
-#   "/volume2/xxx"
-#   "/volume3"
-#   "/volume2/clouddrive/abc"
-#   "/volume5"
-# )
-# for i in ${!paths[@]}; do
-#   echo "  $i: ${paths[$i]} -> $(get_mount_point ${paths[$i]})"
-# done
-# exit 0
-
-
-
 # 设置挂载点为共享挂载
 make_shared() {
-  sudo mount --make-shared $1
+  $SUDO_CMD mount --make-shared $1
 }
 
 
@@ -117,7 +156,7 @@ on_error() {
 # 如果是macOS，提示不能挂载，是否继续
 if [ "$OS" = 'Darwin' ]; then
   echo "❗️ 注意：macOS系统下，使用Docker部署并不支持挂载目录，只可以使用WebDAV服务，建议直接使用二进制版本。"
-  read -p "❓ 是否继续安装？（y/n，默认为n）：" CONTINUE_INSTALL
+  read -p "❓ 是否继续进行docker部署？（y/n，默认为n）：" CONTINUE_INSTALL
   CONTINUE_INSTALL=${CONTINUE_INSTALL:-n}
   echo ""
 
@@ -185,7 +224,7 @@ mkdir -p "$DIR_NAME"
 # 进入用户输入的目录名称
 cd "$DIR_NAME"
 DIR_FULL_PATH=$(pwd)
-echo "📁 已进入目录：$(pwd)"
+echo "📁 已创建并进入目录：$(pwd)"
 echo ""
 
 
@@ -207,6 +246,8 @@ CLOUDDRIVE_HOME=/Config
 # 创建挂载目录
 mkdir -p data
 echo "✅ 已创建挂载目录：$(pwd)/data"
+echo "🔘 该目录映射到容器的路径为「/CloudNAS」，在以后进行挂载时你可以看到「/CloudNAS」这个目录。"
+DEFAULT_MOUNT_DIR=$(pwd)/data
 echo ""
 
 
@@ -231,29 +272,38 @@ DEFAULT_NETWORK=bridge
 NETWORK=${NETWORK:-$DEFAULT_NETWORK}
 # echo ""
 
+# 需要设置共享挂载的系统挂载点
+MOUNT_POINTS_SHARED=()
 
 # 映射列表
 VOLUMES="- $(pwd)/config:${CLOUDDRIVE_HOME}"
 
-VOLUMES="${VOLUMES}\n      - $(pwd)/data:/CloudNAS"
+VOLUMES="${VOLUMES}\n      - ${DEFAULT_MOUNT_DIR}:/CloudNAS"
 # 如果不是macOS，在映射后面加上共享挂载标志
 if [ "$OS" != 'Darwin' ]; then
-  sharedType=$(get_shared_type "$(pwd)/data")
+  sharedType=$(get_shared_type "${DEFAULT_MOUNT_DIR}")
   if [[ -z $sharedType ]]; then
     echo "❌ 错误：未找到目录 $(pwd)/data 所在的挂载点。"
     on_error "${DIR_FULL_PATH}"
   fi
   VOLUMES="${VOLUMES}:${sharedType}"
-fi
 
-# 需要设置共享挂载的系统挂载点
-MOUNT_POINTS_SHARED=()
+  HOST_VOLUME_PATH_MOUNT_POINT=$(get_mount_point "${DEFAULT_MOUNT_DIR}")
+  if [[ -z "$HOST_VOLUME_PATH_MOUNT_POINT" ]]; then
+    echo "❌ 错误：不能判断 ${DEFAULT_MOUNT_DIR} 所属的系统挂载点！"
+    continue
+  fi
+  # 添加到 MOUNT_POINTS_SHARED
+  if [[ ! " ${MOUNT_POINTS_SHARED[@]} " =~ " ${HOST_VOLUME_PATH_MOUNT_POINT} " ]]; then
+    MOUNT_POINTS_SHARED+=("$HOST_VOLUME_PATH_MOUNT_POINT")
+  fi
+fi
 
 VOLUME_ITEMS=()
 echo "🔘 如有需要，你可以添加更多挂载目录。也可以在之后通过修改「docker-compose.yml」文件设置挂载目录。"
 echo "🔘 格式为「/path/to/movies:/movies」，其中「path/to/movies」为宿主机上的目录，「/movies」为容器内的目录，使用英文冒号间隔。"
 while true; do
-  read -p "❓ 请输入需要映射的挂载目录，每次输入一个映射，留空则跳过： " VOLUME_ITEM
+  read -p "❓ 请输入需要映射的挂载目录，每次输入一个映射，留空则进入下一步： " VOLUME_ITEM
   if [[ -z "$VOLUME_ITEM" ]]; then
     break
   elif ! echo "$VOLUME_ITEM" | grep -qE '^[^:]+:[^:]+$'; then
@@ -304,8 +354,16 @@ done
 echo ""
 
 
-# 镜像名称 TODO 暂时固定
-IMAGE_NAME=cloudnas/clouddrive2-unstable:latest
+# 版本tag
+DEFAULT_IMAGE_TAG=latest
+read -p "❓ 请输入镜像版本（默认为 ${DEFAULT_IMAGE_TAG}）：" IMAGE_TAG
+IMAGE_TAG=${IMAGE_TAG:-${DEFAULT_IMAGE_TAG}}
+
+# 镜像名称
+IMAGE_NAME=cloudnas/clouddrive2:${IMAGE_TAG}
+echo "✅ 镜像名称：$IMAGE_NAME"
+echo ""
+
 
 # 服务名称
 SERVICE_NAME=clouddrive2
@@ -377,7 +435,7 @@ if [[ "$OS" != "Darwin" ]]; then
       on_error "${DIR_FULL_PATH}"
     fi
 
-    MOUNT_COMMANDS+=("sudo mount --make-shared $MOUNT_POINT")
+    MOUNT_COMMANDS+=("$SUDO_CMD mount --make-shared $MOUNT_POINT")
   done
   echo "✅ 已设置共享挂载"
   echo ""
@@ -399,18 +457,6 @@ if [[ "$OS" != "Darwin" ]]; then
   echo ""
 fi
 
-
-# 创建.env文件 TODO 可能不使用.env会更简单一些
-# echo "⏳ 创建.env文件..."
-# touch .env
-# echo "✅ 已创建.env文件"
-# # 写入环境变量
-# echo "⏳ 写入环境变量..."
-# echo "TZ=Asia/Shanghai" >> .env
-# echo "HTTP_PORT=$HTTP_PORT" >> .env
-# echo "CLOUDDRIVE_HOME=$CLOUDDRIVE_HOME" >> .env
-# echo "✅ 已写入环境变量"
-# echo ""
 
 # 创建docker-compose.yml文件
 echo "⏳ 创建docker-compose.yml文件..."
@@ -512,9 +558,11 @@ if [[ "$RUN_CONTAINER" =~ ^[Yy](es)?$ ]]; then
     on_error "${DIR_FULL_PATH}"
   fi
 else
+  # 创建容器
+  docker-compose create
+
   echo "🔘 你可以之后通过以下命令启动容器:"
-  echo "cd ${DIR_FULL_PATH}"
-  echo "docker-compose up -d"
+  echo "cd ${DIR_FULL_PATH} && docker-compose up -d"
 fi
 
 
@@ -522,4 +570,4 @@ update_tips
 
 
 echo ""
-echo "👋 Enjoy！ 再见！"
+echo "👋 Enjoy！"
