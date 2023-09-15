@@ -34,4 +34,4 @@ docker-compose up -d
 TODO
 
 ## Windows
-TODO
+TBD
