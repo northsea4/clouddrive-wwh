@@ -381,16 +381,6 @@ IMAGE_NAME=${IMAGE_NAME}:${IMAGE_TAG}
 echo "✅ 镜像名称：$IMAGE_NAME"
 echo ""
 
-# 版本tag
-DEFAULT_IMAGE_TAG=latest
-read -p "❓ 请输入镜像版本（默认为 ${DEFAULT_IMAGE_TAG}）：" IMAGE_TAG
-IMAGE_TAG=${IMAGE_TAG:-${DEFAULT_IMAGE_TAG}}
-
-# 镜像名称
-IMAGE_NAME=cloudnas/clouddrive2:${IMAGE_TAG}
-echo "✅ 镜像名称：$IMAGE_NAME"
-echo ""
-
 
 # 服务名称
 SERVICE_NAME=clouddrive2
